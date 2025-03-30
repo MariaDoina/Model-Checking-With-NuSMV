@@ -1,0 +1,145 @@
+-- Exemplu intersectie drum-cale ferata
+
+--------------------------------------------------------
+-- Module - Train
+--------------------------------------------------------
+MODULE Train(railCrossingStatus, trainSignal)
+VAR
+	trainStatus : {noInfo, horn, going, gone};
+
+ASSIGN
+	init(trainStatus) := noInfo;
+
+	next(trainStatus) := case
+		trainStatus = noInfo & railCrossingStatus = open & trainSignal = go : horn;
+		trainStatus = horn & railCrossingStatus = close & trainSignal = go : going;
+		trainStatus = going & railCrossingStatus = close : gone;
+		trainStatus = gone & railCrossingStatus = open & trainSignal = go : noInfo;
+		TRUE : trainStatus;
+	esac;
+
+--------------------------------------------------------
+-- Module - Railway Crossing Gate
+--------------------------------------------------------
+MODULE RailwayCrossing(trainStatus, vehicleStatus, trainSignal)
+VAR
+	railCrossingStatus : {open, close, wait};
+
+ASSIGN
+	init(railCrossingStatus) := open;
+
+	next(railCrossingStatus) := case
+		trainSignal = stop & trainStatus != going : open;
+		railCrossingStatus = open & trainStatus = horn & vehicleStatus != passing : close;
+		railCrossingStatus = open & trainStatus = horn & vehicleStatus = passing : wait;
+		trainStatus = gone : open;
+		railCrossingStatus = wait : close;
+		TRUE : railCrossingStatus;
+	esac;
+
+--------------------------------------------------------
+-- Module - Vehicle
+--------------------------------------------------------
+MODULE Vehicle(railCrossingStatus, trainStatus)
+VAR
+	vehicleStatus : {wait, passing};
+	waitCounter : 0..5;
+
+ASSIGN
+	init(vehicleStatus) := passing;
+	init(waitCounter) := 0;
+
+	next(vehicleStatus) := case
+		trainStatus = horn | railCrossingStatus = close : wait;
+		railCrossingStatus = open : passing;
+		TRUE : vehicleStatus;
+	esac;
+
+	next(waitCounter) := case
+		vehicleStatus = wait & waitCounter < 5 : waitCounter + 1;
+		vehicleStatus = passing : 0;
+		TRUE : waitCounter;
+	esac;
+
+--------------------------------------------------------
+-- Module - Train Signal Controller
+--------------------------------------------------------
+MODULE TrainSignalController(trainStatus, waitCounter, vehicleStatus)
+VAR
+	trainSignal : {stop, go};
+
+DEFINE
+	WAIT_LIMIT := 5;
+
+ASSIGN
+	init(trainSignal) := go;
+
+	next(trainSignal) := case
+		waitCounter >= WAIT_LIMIT : stop;
+		trainStatus = gone & vehicleStatus = wait : stop;
+		trainStatus = noInfo & vehicleStatus = passing : go;
+		TRUE : trainSignal;
+	esac;
+
+--------------------------------------------------------
+-- Module - Main
+--------------------------------------------------------
+MODULE main
+VAR
+	vehicle : Vehicle(railwayCrossing.railCrossingStatus, train.trainStatus);
+	trainSignalController : TrainSignalController(train.trainStatus, vehicle.waitCounter, vehicle.vehicleStatus);
+	train : Train(railwayCrossing.railCrossingStatus, trainSignalController.trainSignal);
+	railwayCrossing : RailwayCrossing(train.trainStatus, vehicle.vehicleStatus, trainSignalController.trainSignal);
+
+--------------------------------------------------------
+-- Proprietati CTL
+--------------------------------------------------------
+
+--Trenul merge doar daca bariera este inchisa
+SPEC AG (train.trainStatus = going -> railwayCrossing.railCrossingStatus = close)
+ 
+--Trenul si vehiculul nu sunt niciodata simultan pe cale
+SPEC AG !(train.trainStatus = going & vehicle.vehicleStatus = passing)
+ 
+--  Vehiculul nu trece cand bariera este inchisa
+SPEC AG !(vehicle.vehicleStatus = passing & railwayCrossing.railCrossingStatus = close)
+ 
+--  Orice vehicul care asteapta va trece in viitor
+SPEC AG (vehicle.vehicleStatus = wait -> EF vehicle.vehicleStatus = passing)
+ 
+-- Daca trenul claxoneaza si vehiculul e pe drum, bariera intra in wait
+SPEC AG ((train.trainStatus = horn & vehicle.vehicleStatus = passing) -> AF (railwayCrossing.railCrossingStatus = wait))
+ 
+--  Bariera se va deschide in viitor
+SPEC AG (railwayCrossing.railCrossingStatus = close -> EF railwayCrossing.railCrossingStatus = open)
+ 
+-- Bariera ramane inchisa pana trenul pleaca
+SPEC AG ((train.trainStatus = horn & railwayCrossing.railCrossingStatus = close) -> (A [railwayCrossing.railCrossingStatus = close U train.trainStatus = gone]))
+ 
+-- Dupa claxon, trenul porneste sau ramane in horn
+SPEC AG (train.trainStatus = horn -> AX (train.trainStatus = horn | train.trainStatus = going))
+ 
+-- Daca un vehicul asteapta prea mult, trenul trebuie sa opreasca
+SPEC AG (vehicle.waitCounter >= 5 -> trainSignalController.trainSignal = stop)
+
+--------------------------------------------------------
+-- Proprietati LTL
+--------------------------------------------------------
+ 
+-- Bariera ramane inchisa cat timp trenul merge
+LTLSPEC G (train.trainStatus = going -> railwayCrossing.railCrossingStatus = close)
+ 
+-- Daca un vehicul asteapta, va putea trece in viitor
+LTLSPEC G (vehicle.vehicleStatus = wait -> F vehicle.vehicleStatus = passing)
+ 
+-- Daca semaforul este rosu, trenul nu poate porni imediat
+LTLSPEC G (trainSignalController.trainSignal = stop -> X !(train.trainStatus = going))
+ 
+-- Dupa claxon, trenul va porni in viitor
+LTLSPEC G (train.trainStatus = horn -> F train.trainStatus = going)
+ 
+-- Dupa ce trenul a trecut, bariera se va deschide
+LTLSPEC G (train.trainStatus = gone -> F railwayCrossing.railCrossingStatus = open)
+ 
+-- Trenul si vehiculul nu pot fi simultan pe cale
+LTLSPEC G !(train.trainStatus = going & vehicle.vehicleStatus = passing)
